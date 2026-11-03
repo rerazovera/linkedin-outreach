@@ -1,0 +1,49 @@
+# Dokploy: despliegue inicial. Cambie credenciales en un nuevo despliegue SOLO si actualiza MariaDB tambien.
+services:
+  db:
+    image: mariadb:11.8
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-b45kyuXbPGNUL2u3FqWLwtJHHNFZyg1KG5CHJmHa}
+      MARIADB_DATABASE: ${DB_NAME:-outreach}
+      MARIADB_USER: ${DB_USER:-outreach}
+      MARIADB_PASSWORD: ${DB_PASSWORD:-o--9zrb_JGmTW-4LSqVaGJyiBIPy3xv0YiTEfXtu}
+    volumes:
+      - dbdata:/var/lib/mysql
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      # Comprueba disponibilidad del servidor, sin depender de credenciales root antiguas.
+      test: ["CMD-SHELL", "mariadb-admin ping --host=127.0.0.1 --silent >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 90s
+  api:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      DB_HOST: db
+      DB_PORT: '3306'
+      DB_USER: ${DB_USER:-outreach}
+      DB_PASSWORD: ${DB_PASSWORD:-o--9zrb_JGmTW-4LSqVaGJyiBIPy3xv0YiTEfXtu}
+      DB_NAME: ${DB_NAME:-outreach}
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-VzIcnjDYt0MX8zjpY2utZ7FhjB3mD1E8}
+      JWT_SECRET: ${JWT_SECRET:-2f02360f233e7ea182afd99d3bbf4f575a33d1e3407ea2ceb3141a5a15cc13de2fa3912bd3e82d74274b48b5bdc083ae}
+      BREVO_API_KEY: ${BREVO_API_KEY:-}
+      BREVO_SENDER_EMAIL: ${BREVO_SENDER_EMAIL:-}
+      BREVO_SENDER_NAME: ${BREVO_SENDER_NAME:-Raul Erazo}
+    depends_on:
+      db:
+        condition: service_started
+    expose:
+      - '3001'
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - '${WEB_PORT:-8080}:80'
+volumes:
+  dbdata:

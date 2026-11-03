@@ -1,0 +1,1 @@
+{"name":"linkedin-outreach-web","version":"1.0.0","type":"module","scripts":{"build":"vite build","dev":"vite --host"},"dependencies":{"vite":"^6.1.0","react":"^19.0.0","react-dom":"^19.0.0","lucide-react":"^0.468.0"},"devDependencies":{}}
