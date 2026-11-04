@@ -14,7 +14,37 @@ app.get('/api/contacts',auth,async(req,res)=>{try{res.json(await query('SELECT *
 app.post('/api/contacts',auth,async(req,res)=>{try{const {name,email,linkedin_url,notes}=req.body;if(!name?.trim())return res.status(400).json({error:'Nombre requerido'});const r=await query('INSERT INTO contacts (name,email,linkedin_url,notes) VALUES (?,?,?,?)',[name.trim(),email||null,linkedin_url||null,notes||null]);res.json({id:Number(r.insertId)})}catch(e){res.status(500).json({error:e.message})}});
 app.put('/api/contacts/:id',auth,async(req,res)=>{try{const {name,email,linkedin_url,notes,status}=req.body;const allowed=['pending','prepared','sent','failed','cancelled'];if(!name?.trim()||!allowed.includes(status))return res.status(400).json({error:'Datos inválidos'});await query('UPDATE contacts SET name=?,email=?,linkedin_url=?,notes=?,status=?,sent_at=CASE WHEN ?="sent" THEN COALESCE(sent_at,NOW()) ELSE NULL END WHERE id=?',[name.trim(),email||null,linkedin_url||null,notes||null,status,status,req.params.id]);res.json({ok:true})}catch(e){res.status(500).json({error:e.message})}});
 app.delete('/api/contacts/:id',auth,async(req,res)=>{try{await query('DELETE FROM contacts WHERE id=?',[req.params.id]);res.json({ok:true})}catch(e){res.status(500).json({error:e.message})}});
-app.post('/api/import',auth,multer({storage:multer.memoryStorage(),limits:{fileSize:5*1024*1024}}).single('file'),async(req,res)=>{try{if(!req.file)return res.status(400).json({error:'Adjunta un CSV'});const records=parse(req.file.buffer.toString('utf8').replace(/^\uFEFF/,''),{columns:true,skip_empty_lines:true,relax_column_count:true});let count=0;for(const r of records){const name=(r.Name||[r['First Name'],r['Last Name']].filter(Boolean).join(' ')||r.name||'').trim();if(!name)continue;await query('INSERT INTO contacts (name,email,linkedin_url) VALUES (?,?,?)',[name,r['Email Address']||r.email||null,r.URL||r.linkedin_url||null]);count++}res.json({imported:count})}catch(e){res.status(400).json({error:e.message})}});
+// Importación directa de Invitations.csv exportado por LinkedIn.
+const clean = v => String(v ?? '').trim();
+const profile = v => { const value=clean(v); if(!value)return ''; try { const u=new URL(value); if(!['linkedin.com','www.linkedin.com'].includes(u.hostname.toLowerCase()) || !u.pathname.startsWith('/in/'))return ''; return `${u.origin}${u.pathname.replace(/\/$/,'')}`; } catch {return '';} };
+app.post('/api/import',auth,multer({storage:multer.memoryStorage(),limits:{fileSize:10*1024*1024}}).single('file'),async(req,res)=>{
+ try {
+  if(!req.file)return res.status(400).json({error:'Adjunta Invitations.csv'});
+  const records=parse(req.file.buffer.toString('utf8').replace(/^\uFEFF/,''),{columns:true,bom:true,skip_empty_lines:true,relax_column_count:true,trim:true});
+  if(!records.length)return res.status(400).json({error:'El archivo CSV está vacío'});
+  const cols=Object.keys(records[0]);const invitations=['From','To','Direction','inviterProfileUrl','inviteeProfileUrl'].every(k=>cols.includes(k));
+  const connections=['First Name','Last Name'].every(k=>cols.includes(k));
+  if(!invitations&&!connections)return res.status(400).json({error:'Formato no reconocido. Se espera Invitations.csv (From,To,Direction,inviterProfileUrl,inviteeProfileUrl) o Connections.csv.'});
+  const result={imported:0,updated:0,duplicates:0,invalid:0,total:records.length,format:invitations?'Invitations.csv':'Connections.csv',withoutEmail:0};
+  const seen=new Set();
+  for(const r of records){
+   const dir=clean(r.Direction).toUpperCase();
+   if(invitations&&!['OUTGOING','INCOMING'].includes(dir)){result.invalid++;continue;}
+   const name=invitations?clean(dir==='OUTGOING'?r.To:r.From):clean([r['First Name'],r['Last Name']].filter(Boolean).join(' '));
+   const url=profile(invitations?(dir==='OUTGOING'?r.inviteeProfileUrl:r.inviterProfileUrl):(r.URL||r.linkedin_url));
+   const email=clean(r['Email Address']||r.email)||null;
+   if(!name||!url){result.invalid++;continue;}
+   const key=url.toLowerCase();if(seen.has(key)){result.duplicates++;continue;}seen.add(key);
+   const existing=await query('SELECT id,email FROM contacts WHERE LOWER(TRIM(TRAILING \'/\' FROM linkedin_url))=? LIMIT 1',[key]);
+   if(existing.length){
+    if(email&&!existing[0].email){await query('UPDATE contacts SET email=? WHERE id=?',[email,existing[0].id]);result.updated++;}
+    else result.duplicates++;
+   } else {await query('INSERT INTO contacts (name,email,linkedin_url,notes) VALUES (?,?,?,?)',[name,email,url,invitations?`Invitación ${dir}; fecha original: ${clean(r['Sent At'])}`:'Importado desde Connections.csv']);result.imported++;}
+   if(!email)result.withoutEmail++;
+  }
+  res.json(result);
+ }catch(e){console.error('Import CSV:',e);res.status(400).json({error:e.message});}
+});
 // Cola persistente: MariaDB conserva los mensajes aun si el contenedor reinicia.
 const emailPattern=/^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const allowedJobs=['queued','retry','sending','sent','failed','expired','cancelled'];
