@@ -5,6 +5,14 @@ import mariadb from 'mariadb';
 import multer from 'multer';
 import {parse} from 'csv-parse/sync';
 const app=express();app.use(cors());app.use(express.json({limit:'1mb'}));
+// MariaDB devuelve BIGINT como bigint nativo (por ejemplo id y affectedRows).
+// JSON.stringify no admite bigint: números seguros se convierten a Number;
+// enteros fuera del rango seguro se serializan como String sin perder precisión.
+app.set('json replacer', (_key, value) => {
+ if (typeof value !== 'bigint') return value;
+ return value <= BigInt(Number.MAX_SAFE_INTEGER) && value >= BigInt(Number.MIN_SAFE_INTEGER)
+  ? Number(value) : value.toString();
+});
 const pool=mariadb.createPool({host:process.env.DB_HOST||'db',port:Number(process.env.DB_PORT||3306),user:process.env.DB_USER||'outreach',password:process.env.DB_PASSWORD,database:process.env.DB_NAME||'outreach',connectionLimit:5,connectTimeout:10000,acquireTimeout:20000,initializationTimeout:30000});
 const secret=process.env.JWT_SECRET;if(!secret||secret.length<32||secret==='replace-with-long-random-secret'){console.error('Configure JWT_SECRET');process.exit(1)}
 const auth=(req,res,next)=>{try{const t=(req.headers.authorization||'').replace(/^Bearer /,'');jwt.verify(t,secret);next()}catch{res.status(401).json({error:'No autorizado'})}};
